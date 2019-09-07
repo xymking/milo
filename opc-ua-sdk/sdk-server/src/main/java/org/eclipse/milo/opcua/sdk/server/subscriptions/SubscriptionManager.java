@@ -627,7 +627,7 @@ public class SubscriptionManager {
 
             try {
                 server.getAddressSpaceManager().onModifyEventItem(
-                    monitoredItem.getReadValueId(),
+                    (EventItem) monitoredItem,
                     requestedQueueSize,
                     revisedQueueSize::set
                 );
@@ -669,7 +669,7 @@ public class SubscriptionManager {
 
             try {
                 server.getAddressSpaceManager().onModifyDataItem(
-                    monitoredItem.getReadValueId(),
+                    (DataItem) monitoredItem,
                     requestedSamplingInterval,
                     requestedQueueSize,
                     (rsi, rqs) -> {
