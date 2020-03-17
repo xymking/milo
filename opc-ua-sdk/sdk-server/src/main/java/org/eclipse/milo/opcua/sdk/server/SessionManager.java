@@ -187,12 +187,12 @@ public class SessionManager implements
 
         ByteString clientNonce = request.getClientNonce();
 
-        if (clientNonce.isNotNull() && (clientNonce.length() < 32)) {
-            throw new UaException(StatusCodes.Bad_NonceInvalid);
-        }
+        if (securityPolicy != SecurityPolicy.None) {
+            NonceUtil.validateNonce(clientNonce);
 
-        if (securityPolicy != SecurityPolicy.None && clientNonces.contains(clientNonce)) {
-            throw new UaException(StatusCodes.Bad_NonceInvalid);
+            if (clientNonces.contains(clientNonce)) {
+                throw new UaException(StatusCodes.Bad_NonceInvalid);
+            }
         }
 
         if (securityPolicy != SecurityPolicy.None && clientNonce.isNotNull()) {

@@ -16,7 +16,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.cert.X509Certificate;
 import java.util.List;
-import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import javax.crypto.Cipher;
@@ -37,6 +36,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.SignatureData;
 import org.eclipse.milo.opcua.stack.core.types.structured.UserNameIdentityToken;
 import org.eclipse.milo.opcua.stack.core.types.structured.UserTokenPolicy;
 import org.eclipse.milo.opcua.stack.core.util.CertificateUtil;
+import org.eclipse.milo.opcua.stack.core.util.NonceUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -118,30 +118,28 @@ public class UsernameProvider implements IdentityProvider {
 
         UserTokenPolicy tokenPolicy = policyChooser.apply(tokenPolicies);
 
-        String policyId = tokenPolicy.getPolicyId();
-
-        SecurityPolicy securityPolicy = SecurityPolicy.None;
+        SecurityPolicy securityPolicy;
 
         String securityPolicyUri = tokenPolicy.getSecurityPolicyUri();
         try {
-            if (securityPolicyUri != null && !securityPolicyUri.isEmpty()) {
-                securityPolicy = SecurityPolicy.fromUri(securityPolicyUri);
-            } else {
+            if (securityPolicyUri == null || securityPolicyUri.isEmpty()) {
                 securityPolicyUri = endpoint.getSecurityPolicyUri();
-                securityPolicy = SecurityPolicy.fromUri(securityPolicyUri);
             }
+            securityPolicy = SecurityPolicy.fromUri(securityPolicyUri);
         } catch (Throwable t) {
-            logger.warn("Error parsing SecurityPolicy for uri={}, falling back to no security.", securityPolicyUri);
+            throw new UaException(StatusCodes.Bad_SecurityPolicyRejected, t);
         }
 
         byte[] passwordBytes = password.getBytes(StandardCharsets.UTF_8);
-        byte[] nonceBytes = Optional.ofNullable(serverNonce.bytes()).orElse(new byte[0]);
+        byte[] nonceBytes = serverNonce.bytesOrEmpty();
 
         ByteBuf buffer = Unpooled.buffer();
 
         if (securityPolicy == SecurityPolicy.None) {
             buffer.writeBytes(passwordBytes);
         } else {
+            NonceUtil.validateNonce(serverNonce);
+
             buffer.writeIntLE(passwordBytes.length + nonceBytes.length);
             buffer.writeBytes(passwordBytes);
             buffer.writeBytes(nonceBytes);
@@ -152,7 +150,8 @@ public class UsernameProvider implements IdentityProvider {
                 throw new UaException(
                     StatusCodes.Bad_ConfigurationError,
                     "UserTokenPolicy requires encryption but " +
-                        "server did not provide a certificate in endpoint");
+                        "server did not provide a certificate in endpoint"
+                );
             }
 
             List<X509Certificate> certificateChain = CertificateUtil.decodeCertificates(bs.bytes());
@@ -205,7 +204,7 @@ public class UsernameProvider implements IdentityProvider {
         String encryptionAlgorithm = securityAlgorithmUri.isEmpty() ? null : securityAlgorithmUri;
 
         UserNameIdentityToken token = new UserNameIdentityToken(
-            policyId,
+            tokenPolicy.getPolicyId(),
             username,
             ByteString.of(bs),
             encryptionAlgorithm

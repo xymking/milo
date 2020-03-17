@@ -15,6 +15,8 @@ import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.List;
 
+import org.eclipse.milo.opcua.stack.core.StatusCodes;
+import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.security.SecurityPolicy;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ByteString;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.UserTokenType;
@@ -22,6 +24,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
 import org.eclipse.milo.opcua.stack.core.types.structured.SignatureData;
 import org.eclipse.milo.opcua.stack.core.types.structured.UserTokenPolicy;
 import org.eclipse.milo.opcua.stack.core.types.structured.X509IdentityToken;
+import org.eclipse.milo.opcua.stack.core.util.NonceUtil;
 import org.eclipse.milo.opcua.stack.core.util.SignatureUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,48 +53,52 @@ public class X509IdentityProvider implements IdentityProvider {
             .filter(t -> t.getTokenType() == UserTokenType.Certificate)
             .findFirst().orElseThrow(() -> new Exception("no x509 certificate token policy found"));
 
-        String policyId = tokenPolicy.getPolicyId();
-
-        SecurityPolicy securityPolicy = SecurityPolicy.None;
+        SecurityPolicy securityPolicy;
 
         String securityPolicyUri = tokenPolicy.getSecurityPolicyUri();
 
         try {
-            if (securityPolicyUri != null && !securityPolicyUri.isEmpty()) {
-                securityPolicy = SecurityPolicy.fromUri(securityPolicyUri);
-            } else {
+            if (securityPolicyUri == null || securityPolicyUri.isEmpty()) {
                 securityPolicyUri = endpoint.getSecurityPolicyUri();
-                securityPolicy = SecurityPolicy.fromUri(securityPolicyUri);
             }
+            securityPolicy = SecurityPolicy.fromUri(securityPolicyUri);
         } catch (Throwable t) {
-            logger.warn("Error parsing SecurityPolicy for uri={}", securityPolicyUri);
+            throw new UaException(StatusCodes.Bad_SecurityPolicyRejected, t);
         }
 
         X509IdentityToken token = new X509IdentityToken(
-            policyId,
+            tokenPolicy.getPolicyId(),
             ByteString.of(certificate.getEncoded())
         );
 
-        byte[] serverCertificateBytes = new byte[0];
-        if (!endpoint.getSecurityPolicyUri().equals(SecurityPolicy.None.getUri())) {
-            ByteString serverCertificate = endpoint.getServerCertificate();
-            serverCertificateBytes = serverCertificate.bytesOrEmpty();
+        SignatureData signatureData;
+
+        if (securityPolicy == SecurityPolicy.None) {
+            signatureData = new SignatureData(null, null);
+        } else {
+            NonceUtil.validateNonce(serverNonce);
+
+            byte[] serverCertificateBytes = new byte[0];
+            if (!endpoint.getSecurityPolicyUri().equals(SecurityPolicy.None.getUri())) {
+                ByteString serverCertificate = endpoint.getServerCertificate();
+                serverCertificateBytes = serverCertificate.bytesOrEmpty();
+            }
+
+            byte[] serverNonceBytes = serverNonce.bytes();
+            if (serverNonceBytes == null) serverNonceBytes = new byte[0];
+
+            byte[] signature = SignatureUtil.sign(
+                securityPolicy.getAsymmetricSignatureAlgorithm(),
+                privateKey,
+                ByteBuffer.wrap(serverCertificateBytes),
+                ByteBuffer.wrap(serverNonceBytes)
+            );
+
+            signatureData = new SignatureData(
+                securityPolicy.getAsymmetricSignatureAlgorithm().getUri(),
+                ByteString.of(signature)
+            );
         }
-
-        byte[] serverNonceBytes = serverNonce.bytes();
-        if (serverNonceBytes == null) serverNonceBytes = new byte[0];
-
-        byte[] signature = SignatureUtil.sign(
-            securityPolicy.getAsymmetricSignatureAlgorithm(),
-            privateKey,
-            ByteBuffer.wrap(serverCertificateBytes),
-            ByteBuffer.wrap(serverNonceBytes)
-        );
-
-        SignatureData signatureData = new SignatureData(
-            securityPolicy.getAsymmetricSignatureAlgorithm().getUri(),
-            ByteString.of(signature)
-        );
 
         return new SignedIdentityToken(token, signatureData);
     }
